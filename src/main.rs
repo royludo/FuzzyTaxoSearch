@@ -6,17 +6,22 @@ use nucleo::Nucleo;
 use nucleo_matcher::Utf32String;
 use serde::{Deserialize, Serialize};
 
+mod engine;
+mod io;
+
+
 //use crate::engine::EngineWrapper;
 
 use crate::engine::*;
+use crate::io::EngineInputData;
 
-mod engine;
+
 
 #[derive(Parser, Debug)]
 #[command(version)]
 struct Args {
-    #[arg(long = "taxa", value_parser = valid_file)]
-    taxa_file: String,
+    #[arg(short= 'i', long = "input", value_parser = valid_file)]
+    json_input: String,
 }
 
 fn valid_file(s: &str) -> Result<String, String> {
@@ -97,7 +102,7 @@ struct FuzzyMatchRequest {
 // the output response
 #[derive(Serialize)]
 struct FuzzyMatchResponse {
-    matches: Vec<String>
+    matches: Vec<EngineInputData>
 }
 
 #[derive(Clone)]
@@ -130,16 +135,24 @@ async fn fuzzy(State(engine_pool): State<EnginePool>, Json(payload): Json<FuzzyM
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-    println!("Taxa db file location: {:?}", args.taxa_file);
+    println!("Json file location: {:?}", args.json_input);
 
-    let species_name_set = parse_taxa(args.taxa_file).unwrap();
-    println!("species count: {}", species_name_set.len());
+    let json_input = io::from_file(args.json_input);
+    
+
+    //let species_name_set = parse_taxa(args.taxa_file).unwrap();
+    //println!("species count: {}", species_name_set.len());
 
     //let engine_wrapper = EngineWrapper::new(&species_name_set);
-    let engine_pool = EnginePool::builder(PoolManager { db_string: species_name_set })
+    /*let engine_pool = EnginePool::builder(PoolManager { input_data: result })
         .max_size(2)
         .build()
-        .unwrap();
+        .unwrap();*/
+    let engine_pool = EnginePool::new(10);
+    for _i in 0..2 {
+        let _ = engine_pool.add(EngineWrapper::new(&json_input)).await;
+    }
+    println!("{:?}", engine_pool.status());
 
     
     

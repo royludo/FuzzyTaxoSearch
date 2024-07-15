@@ -11,11 +11,16 @@ struct Args {
     address: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EngineInputData {
+    pub string: String, // non-normalized, arbitrary length, utf8 string, can have whitespace
+    pub data: serde_json::Value, // arbitrary data associated to it
+}
 
 // the output response
 #[derive(Deserialize)]
 struct FuzzyMatchResponse {
-    matches: Vec<String>
+    matches: Vec<EngineInputData>
 }
 
 #[derive(Debug, Clone)]
@@ -47,7 +52,11 @@ impl Autocomplete for SpeciesSuggesterRemote {
                 //println!("status: {:?}", response.status());
                 //println!("body: {:?}", response.text().unwrap());
                 let jsonres = response.json::<FuzzyMatchResponse>();
-                return Ok(jsonres.unwrap().matches);
+                match jsonres {
+                    Ok(inner) => return Ok(inner.matches.into_iter().map(|data| data.string).collect()),
+                    Err(e) => return Err(e.into()),
+                }
+                
             },
             Err(e) => {
                 println!("Request error, status: {:?} {:?}", e.status(), e);
