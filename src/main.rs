@@ -32,67 +32,6 @@ fn valid_file(s: &str) -> Result<String, String> {
     }
 }
 
-pub fn parse_taxa(filename: String) -> Result<HashSet<String>, String> {
-    
-    let mut rdr = csv::Reader::from_reader(BufReader::new(File::open(filename).unwrap()));
-
-    let mut species_names: Vec<String> = Vec::new();
-    let mut raw_species_name_set: HashSet<String> = HashSet::new();
-    let mut parsed_species_name_set: HashSet<String> = HashSet::new();
-    let mut name_map: HashMap<String, Vec<(String, String)>> = HashMap::new();
-    for (i, record_result) in rdr.records().enumerate() {
-        // The iterator yields Result<StringRecord, Error>, so we check the
-        // error here.
-        let record = match record_result {
-            Ok(r) => r,
-            Err(e) => return Err(format!("{}\nWhile parsing taxa file at line {}",e.to_string(), i)),
-        };
-        //println!("{:?}", record);
-
-        let species_name = record[2].to_owned();
-
-        species_names.push(species_name.clone());
-        raw_species_name_set.insert(species_name.clone());
-        let name_parts = species_name.split_whitespace().collect::<Vec<&str>>();
-        let parsed_species_name = format!("{} {}", name_parts[0], name_parts[1]);
-        parsed_species_name_set.insert(parsed_species_name.clone());
-
-        // TODO bad change to get option
-        if name_map.contains_key(&name_parts[0].to_owned().to_lowercase()) {
-            let v = name_map.get_mut(&name_parts[0].to_owned().to_lowercase()).unwrap();
-            v.push((parsed_species_name.clone(), record[0].to_owned()));
-        }
-        else {
-            name_map.insert(name_parts[0].to_owned().to_lowercase(), vec![(parsed_species_name.clone(), record[0].to_owned())]);
-        }
-
-
-        if name_map.contains_key(&name_parts[1].to_owned().to_lowercase()) {
-            let v = name_map.get_mut(&name_parts[1].to_owned().to_lowercase()).unwrap();
-            v.push((parsed_species_name.clone(), record[0].to_owned()));
-        }
-        else {
-            name_map.insert(name_parts[1].to_owned().to_lowercase(), vec![(parsed_species_name.clone(), record[0].to_owned())]);
-        }
-
-        /*println!("name map: {:?}", name_map);
-        break;*/
-
-        //name_map.insert(name_parts[0].to_owned(), (parsed_species_name.clone().to_lowercase(), record[0].to_owned()));
-        //name_map.insert(name_parts[1].to_owned(), (parsed_species_name.to_lowercase(), record[0].to_owned()));
-
-
-
-        /*if i > 3 {
-            break;
-        }*/
-
-        //i += 1;
-    }
-
-    return Ok(parsed_species_name_set);
-}
-
 // the input request
 #[derive(Debug, Deserialize)]
 struct FuzzyMatchRequest {

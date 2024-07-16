@@ -6,12 +6,15 @@ use nucleo_matcher::Utf32String;
 
 use crate::io::EngineInputData;
 
-
+/* 
+behaves like an Arc<Mutex> (doc says: This struct can be cloned and transferred 
+across thread boundaries and uses reference counting for its internal state.)
+*/
 pub type EnginePool = unmanaged::Pool<EngineWrapper>;
 
 #[derive(Clone)]
 pub struct EngineWrapper {
-    engine: Arc<Mutex<Nucleo<EngineInputData>>>,
+    engine: Arc<Mutex<Nucleo<EngineInputData>>>, // is arc mutex really needed here ?
     prev_search_str: String,
 }
 
