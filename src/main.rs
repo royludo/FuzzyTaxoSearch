@@ -1,6 +1,7 @@
-use std::{fs::File, collections::{HashSet, HashMap}, sync::{Arc, Mutex}, str::FromStr};
+use std::{fs::File, collections::{HashSet, HashMap}, sync::{Arc, Mutex}, str::FromStr, borrow::BorrowMut};
 
 use axum::{Router, routing::{get, post}, Json, http::StatusCode, extract::State, response::IntoResponse};
+//use axum_macros::debug_handler;
 use clap::Parser;
 use nucleo::Nucleo;
 use serde::{Deserialize, Serialize};
@@ -8,7 +9,6 @@ use time::Duration;
 use tokio::sync::RwLock;
 use tower_sessions::{MemoryStore, SessionManagerLayer, Expiry, Session, session::Id};
 use uuid::Uuid;
-use axum_macros::debug_handler;
 
 mod engine;
 mod io;
@@ -55,10 +55,8 @@ struct AppState {
     used_engines: Arc<RwLock<HashMap<Uuid, EngineWrapper>>> // this thing could become the bottleneck
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
-struct SessionStuff(String);
 
-#[debug_handler]
+//#[debug_handler]
 async fn fuzzy(
     session: Session,
     State(appstate): State<AppState>, 
@@ -106,7 +104,7 @@ async fn fuzzy(
         None => {
             // first request, session not fully created yet
             println!("First req");
-            let mut session_engine = match appstate.engine_pool.get().await {
+            let mut session_engine = appstate.engine_pool.remove().await.unwrap();/* {
                 Ok(engine) => {
                     engine
                 },
@@ -115,7 +113,7 @@ async fn fuzzy(
                     println!("EnginePool error: {}", e.to_string());
                     return (StatusCode::INTERNAL_SERVER_ERROR, Json(FuzzyMatchResponse{ matches: vec![] }));
                 } 
-            };
+            };*/
 
             // local id
             let uuid = Uuid::new_v4();
@@ -130,12 +128,13 @@ async fn fuzzy(
                 } 
             };*/
 
-            used_engines.insert(uuid, session_engine.clone());
+            
             //std::mem::drop(used_engines);
             
 
             session.insert(SESSION_ENGINE_KEY, uuid.to_string()).await.unwrap();
             let result = session_engine.fuzzy_match(input);
+            used_engines.insert(uuid, session_engine);
             return (StatusCode::OK, Json(FuzzyMatchResponse{ matches: result }));
 
         },

@@ -1,6 +1,6 @@
-use std::{sync::{Mutex, Arc}, collections::{HashMap, HashSet}};
+use std::{sync::{Mutex, Arc}, collections::{HashMap, HashSet}, borrow::BorrowMut, rc::Rc};
 
-use deadpool::{managed, unmanaged};
+use deadpool::unmanaged;
 use nucleo::Nucleo;
 use nucleo_matcher::Utf32String;
 
@@ -12,9 +12,9 @@ across thread boundaries and uses reference counting for its internal state.)
 */
 pub type EnginePool = unmanaged::Pool<EngineWrapper>;
 
-#[derive(Clone)]
+#[derive()]
 pub struct EngineWrapper {
-    engine: Arc<Mutex<Nucleo<EngineInputData>>>, // is arc mutex really needed here ?
+    engine: Nucleo<EngineInputData>, // is arc mutex really needed here ?
     prev_search_str: String,
 }
 
@@ -30,7 +30,7 @@ impl EngineWrapper {
 
     pub fn new(db_string: &Vec<EngineInputData>) -> Self {
         println!("Create new engine");
-        let mut engine = EngineWrapper::init_engine();
+        let engine = EngineWrapper::init_engine();
         
         // populate the search set
         let injector = engine.injector();
@@ -41,11 +41,11 @@ impl EngineWrapper {
             });
         }
 
-        return EngineWrapper { engine: Arc::new(Mutex::new(engine)), prev_search_str: String::new() };
+        return EngineWrapper { engine: engine, prev_search_str: String::new() };
     }
 
     pub fn fuzzy_match(&mut self, input: String) -> Vec<EngineInputData> {
-        let mut nucleo_matcher = self.engine.lock().unwrap();
+        let nucleo_matcher = self.engine.borrow_mut();
     
         // test if current input is an extension of previous output
         let is_string_extension = self.prev_search_str.len() > 1 && input[0..input.len()-1] == self.prev_search_str;
