@@ -53,6 +53,7 @@ struct FuzzyMatchResponse {
 
 #[derive(Clone)]
 struct AppState {
+    server_config: ServerConfig,
     engine_pool: EnginePool,
     used_engines: Arc<RwLock<HashMap<Uuid, (EngineWrapper, DelayHandle)>>>, // this thing could become the bottleneck
     delay_q: Arc<RwLock<DelayQueue<Uuid, GrowingHeapBuf<Uuid>>>>,
@@ -91,6 +92,8 @@ async fn fuzzy(
             println!("Follow up req, use sid {:?}", sid);
 
             let local_uuid_string: String = session.get(SESSION_ENGINE_KEY).await.unwrap().unwrap();
+            // keep session alive by resetting expiry
+            session.set_expiry(Some(Expiry::OnInactivity(Duration::seconds(appstate.server_config.session_expiry_delay))));
             let local_uuid = Uuid::from_str(&local_uuid_string).unwrap();
             let mut used_engines = appstate.used_engines.write().await;/* {
                 Ok(used_engines_map) => used_engines_map,
@@ -172,6 +175,23 @@ async fn fuzzy(
     
 }
 
+#[derive(Debug, Clone)]
+struct ServerConfig {
+    pool_max_size: usize,
+    pool_min_size: usize,
+    session_expiry_delay: i64, // in seconds
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self { 
+            pool_max_size: 10,
+            pool_min_size: 2,
+            session_expiry_delay: 10,
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
@@ -179,6 +199,7 @@ async fn main() {
 
     let json_input = io::from_file(args.json_input);
     
+    let server_config = ServerConfig::default(); 
 
     //let species_name_set = parse_taxa(args.taxa_file).unwrap();
     //println!("species count: {}", species_name_set.len());
@@ -188,8 +209,8 @@ async fn main() {
         .max_size(2)
         .build()
         .unwrap();*/
-    let engine_pool = EnginePool::new(10);
-    for _i in 0..2 {
+    let engine_pool = EnginePool::new(server_config.pool_max_size);
+    for _i in 0..server_config.pool_min_size {
         let _ = engine_pool.add(EngineWrapper::new(&json_input)).await;
     }
     println!("{:?}", engine_pool.status());
@@ -199,7 +220,8 @@ async fn main() {
     let arcmutex_used_engine = Arc::new(RwLock::new(HashMap::new()));
 
 
-    let appstate = AppState{ 
+    let appstate = AppState{
+        server_config: server_config.clone(),
         engine_pool: engine_pool.clone(), 
         used_engines: arcmutex_used_engine.clone(),
         delay_q: Arc::new(RwLock::new(delay_queue)),
@@ -208,7 +230,7 @@ async fn main() {
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store)
         //.with_secure(false);
-        .with_expiry(Expiry::OnInactivity(Duration::seconds(10)));
+        .with_expiry(Expiry::OnInactivity(Duration::seconds(server_config.session_expiry_delay)));
 
     let _ = tokio::spawn(async move {
         //let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
