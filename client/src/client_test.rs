@@ -87,7 +87,7 @@ pub fn client_tui() {
    
 
 
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::blocking::ClientBuilder::new().cookie_store(true).build().unwrap();
     let spesugg = SpeciesSuggesterRemote{ client, addr: full_route };
 
 

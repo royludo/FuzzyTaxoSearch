@@ -1,8 +1,10 @@
-use std::{fs::File, collections::{HashSet, HashMap}, sync::{Arc, Mutex}, str::FromStr, borrow::BorrowMut};
+use std::{fs::File, collections::{HashSet, HashMap}, sync::{Arc, Mutex}, str::FromStr, borrow::BorrowMut, ops::DerefMut};
 
 use axum::{Router, routing::{get, post}, Json, http::StatusCode, extract::State, response::IntoResponse};
 //use axum_macros::debug_handler;
 use clap::Parser;
+use futures_delay_queue::{delay_queue, DelayQueue, DelayHandle};
+use futures_intrusive::{channel::shared::GenericReceiver, buffer::GrowingHeapBuf};
 use nucleo::Nucleo;
 use serde::{Deserialize, Serialize};
 use time::Duration;
@@ -52,7 +54,8 @@ struct FuzzyMatchResponse {
 #[derive(Clone)]
 struct AppState {
     engine_pool: EnginePool,
-    used_engines: Arc<RwLock<HashMap<Uuid, EngineWrapper>>> // this thing could become the bottleneck
+    used_engines: Arc<RwLock<HashMap<Uuid, (EngineWrapper, DelayHandle)>>>, // this thing could become the bottleneck
+    delay_q: Arc<RwLock<DelayQueue<Uuid, GrowingHeapBuf<Uuid>>>>,
 }
 
 
@@ -87,7 +90,8 @@ async fn fuzzy(
             // follow up requests, session already created, need to reuse it
             println!("Follow up req, use sid {:?}", sid);
 
-            let local_uuid: String = session.get(SESSION_ENGINE_KEY).await.unwrap().unwrap();
+            let local_uuid_string: String = session.get(SESSION_ENGINE_KEY).await.unwrap().unwrap();
+            let local_uuid = Uuid::from_str(&local_uuid_string).unwrap();
             let mut used_engines = appstate.used_engines.write().await;/* {
                 Ok(used_engines_map) => used_engines_map,
                 Err(e) => {
@@ -96,8 +100,16 @@ async fn fuzzy(
                 } 
             };*/
 
-            let session_engine = used_engines.get_mut(&Uuid::from_str(&local_uuid).unwrap()).unwrap();
+            // we need to get ownership of delay_handle, hence the remove()
+            let (mut session_engine, delay_handle) = used_engines.remove(&local_uuid).unwrap();
             let result = session_engine.fuzzy_match(input);
+
+            //let stuff = delay_handle.borrow_mut();
+            let new_handle = delay_handle.reset(std::time::Duration::from_secs(5)).await.unwrap();
+            used_engines.insert(local_uuid, (session_engine, new_handle));
+
+
+
             return (StatusCode::OK, Json(FuzzyMatchResponse{ matches: result }));
 
         },
@@ -134,7 +146,13 @@ async fn fuzzy(
 
             session.insert(SESSION_ENGINE_KEY, uuid.to_string()).await.unwrap();
             let result = session_engine.fuzzy_match(input);
-            used_engines.insert(uuid, session_engine);
+
+            let delay_handle = appstate.delay_q.write().await.insert(uuid, std::time::Duration::from_secs(5));
+
+            used_engines.insert(uuid, (session_engine, delay_handle));
+
+            
+
             return (StatusCode::OK, Json(FuzzyMatchResponse{ matches: result }));
 
         },
@@ -175,12 +193,43 @@ async fn main() {
         let _ = engine_pool.add(EngineWrapper::new(&json_input)).await;
     }
     println!("{:?}", engine_pool.status());
-    let appstate = AppState{ engine_pool, used_engines: Arc::new(RwLock::new(HashMap::new())) };
+
+    let (delay_queue , rx) = delay_queue::<Uuid>();
+    //let arcmutex_delay_q = Arc::new(RwLock::new(delay_queue));
+    let arcmutex_used_engine = Arc::new(RwLock::new(HashMap::new()));
+
+
+    let appstate = AppState{ 
+        engine_pool: engine_pool.clone(), 
+        used_engines: arcmutex_used_engine.clone(),
+        delay_q: Arc::new(RwLock::new(delay_queue)),
+    };
 
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store)
         //.with_secure(false);
         .with_expiry(Expiry::OnInactivity(Duration::seconds(10)));
+
+    let _ = tokio::spawn(async move {
+        //let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+
+        loop {
+            println!("awaiting timers");
+            match rx.receive().await {
+                Some(uuid_to_remove) => {
+                    println!("Putting back engine id {:?}", uuid_to_remove);
+                    let mut lock = arcmutex_used_engine.write().await;
+                    let (engine, _) = lock.remove(&uuid_to_remove).unwrap();
+                    let _ = engine_pool.add(engine).await;
+                },
+                None => {
+                    // the channel was closed
+                    break;
+                }
+            }
+        }
+    });
+    //let _ = forever.await;
     
 
     //let appstate = AppState{ engine: Arc::new(Mutex::new(matcher)) };
