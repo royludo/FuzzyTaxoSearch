@@ -11,6 +11,7 @@ use time::Duration;
 use tokio::sync::RwLock;
 use tower_sessions::{MemoryStore, SessionManagerLayer, Expiry, Session, session::Id};
 use uuid::Uuid;
+use tokio::sync::Mutex as tok_Mutex;
 
 mod engine;
 mod io;
@@ -55,8 +56,8 @@ struct FuzzyMatchResponse {
 struct AppState {
     server_config: ServerConfig,
     engine_pool: EnginePool,
-    used_engines: Arc<RwLock<HashMap<Uuid, (EngineWrapper, DelayHandle)>>>, // this thing could become the bottleneck
-    delay_q: Arc<RwLock<DelayQueue<Uuid, GrowingHeapBuf<Uuid>>>>,
+    used_engines: Arc<tok_Mutex<HashMap<Uuid, (EngineWrapper, DelayHandle)>>>, // this thing could become the bottleneck
+    delay_q: Arc<Mutex<DelayQueue<Uuid, GrowingHeapBuf<Uuid>>>>,
 }
 
 
@@ -83,8 +84,10 @@ async fn fuzzy(
         return (StatusCode::BAD_REQUEST, Json(FuzzyMatchResponse{ matches: vec![] }));
     }
 
-    println!("-- fuzzy request handler      EnginePool {:?} used_engines {:?}", appstate.engine_pool.status(), 
-        appstate.used_engines.read().await.len());
+    {   // the block is necessary because we aquire a lock that needs to go out of scope to be released
+        println!("-- fuzzy request handler      EnginePool {:?} used_engines {:?}", appstate.engine_pool.status(), 
+        appstate.used_engines.lock().await.len());
+    }
 
     match session.id() {
         Some(sid) => {
@@ -95,7 +98,7 @@ async fn fuzzy(
             // keep session alive by resetting expiry
             session.set_expiry(Some(Expiry::OnInactivity(Duration::seconds(appstate.server_config.session_expiry_delay))));
             let local_uuid = Uuid::from_str(&local_uuid_string).unwrap();
-            let mut used_engines = appstate.used_engines.write().await;/* {
+            let mut used_engines = appstate.used_engines.lock().await;/* {
                 Ok(used_engines_map) => used_engines_map,
                 Err(e) => {
                     println!("Used engine lock error: {}", e.to_string());
@@ -135,7 +138,7 @@ async fn fuzzy(
 
             // attribute this engine to the session
             
-            let mut used_engines = appstate.used_engines.write().await;/* {
+            /* {
                 Ok(used_engines_map) => used_engines_map,
                 Err(e) => {
                     println!("Used engine lock error: {}", e.to_string());
@@ -150,8 +153,9 @@ async fn fuzzy(
             session.insert(SESSION_ENGINE_KEY, uuid.to_string()).await.unwrap();
             let result = session_engine.fuzzy_match(input);
 
-            let delay_handle = appstate.delay_q.write().await.insert(uuid, std::time::Duration::from_secs(5));
+            let delay_handle = appstate.delay_q.lock().unwrap().insert(uuid, std::time::Duration::from_secs(5));
 
+            let mut used_engines = appstate.used_engines.lock().await;
             used_engines.insert(uuid, (session_engine, delay_handle));
 
             
@@ -217,14 +221,14 @@ async fn main() {
 
     let (delay_queue , rx) = delay_queue::<Uuid>();
     //let arcmutex_delay_q = Arc::new(RwLock::new(delay_queue));
-    let arcmutex_used_engine = Arc::new(RwLock::new(HashMap::new()));
+    let arcmutex_used_engine = Arc::new(tok_Mutex::new(HashMap::new()));
 
 
     let appstate = AppState{
         server_config: server_config.clone(),
         engine_pool: engine_pool.clone(), 
         used_engines: arcmutex_used_engine.clone(),
-        delay_q: Arc::new(RwLock::new(delay_queue)),
+        delay_q: Arc::new(Mutex::new(delay_queue)),
     };
 
     let session_store = MemoryStore::default();
@@ -240,7 +244,7 @@ async fn main() {
             match rx.receive().await {
                 Some(uuid_to_remove) => {
                     println!("Putting back engine id {:?}", uuid_to_remove);
-                    let mut lock = arcmutex_used_engine.write().await;
+                    let mut lock = arcmutex_used_engine.lock().await;
                     let (engine, _) = lock.remove(&uuid_to_remove).unwrap();
                     let _ = engine_pool.add(engine).await;
                 },
