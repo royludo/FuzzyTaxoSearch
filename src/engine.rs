@@ -1,4 +1,4 @@
-use std::{sync::{Mutex, Arc}, collections::{HashMap, HashSet}, borrow::BorrowMut, rc::Rc};
+use std::{sync::Arc, borrow::BorrowMut};
 
 use deadpool::unmanaged;
 use nucleo::Nucleo;
@@ -46,15 +46,23 @@ impl EngineWrapper {
 
     pub fn fuzzy_match(&mut self, input: String) -> Vec<EngineInputData> {
         let nucleo_matcher = self.engine.borrow_mut();
-    
-        // test if current input is an extension of previous output
-        let is_string_extension = self.prev_search_str.len() > 1 && input[0..input.len()-1] == self.prev_search_str;
+
+        //println!("Original input: {:?} is ascii ? {}", input, input.is_ascii());
+        let ascii_input = if input.is_ascii() {
+            input
+        } else {
+            deunicode::deunicode(input.as_str())
+        };
+        //println!("Unidecoded: {:?}", ascii_input);
+
+        // test if current input is an extension of previous input
+        let is_string_extension = self.prev_search_str.len() > 1 && ascii_input[0..ascii_input.len()-1] == self.prev_search_str;
 
         nucleo_matcher.pattern.reparse(
             0, 
-            input.as_str(), 
+            ascii_input.as_str(), 
             nucleo_matcher::pattern::CaseMatching::Ignore, 
-            nucleo_matcher::pattern::Normalization::Smart, 
+            nucleo_matcher::pattern::Normalization::Never, 
             is_string_extension);
         
         
@@ -70,7 +78,7 @@ impl EngineWrapper {
             .map(|item| item.data.clone() )
             .collect::<Vec<EngineInputData>>();
 
-        self.prev_search_str = input.to_owned();
+        self.prev_search_str = ascii_input.to_owned();
         return result;
     }
 }

@@ -1,5 +1,5 @@
 [package]
-name = "FuzzyTaxoSearch"
+name = "fuzzy_taxo_search"
 version = "0.1.0"
 edition = "2021"
 
@@ -14,22 +14,34 @@ members = [
 axum-macros = "0.4.1"
 
 [dependencies]
+
+# the fuzzy search engine
 nucleo-matcher = "0.3.1"
 nucleo = "0.5.0"
 
+# manage pool of objects (here, the engines)
 deadpool = "0.12.1"
 
+# timers for putting engines back into the pool
 futures-delay-queue = "0.6.0"
 futures-intrusive = "0.5.0"
 
-time = "0.3.36"
-uuid = {version = "1.10.0", features = ["v4"]}
-
+# the heavy stuff for http server
 axum = "0.7.5"
 tokio = { version =  "1.38.0", features = ["full"] }
 tower = "0.4.13"
 tower-sessions = "0.12.2"
+
+# json serialize/deserialize, for file and http io
 serde = {version = "1.0.204", features = ["derive"]}
 serde_json = "1.0.120"
 
+# command line args parsing
 clap = { version = "4.5.8", features = ["derive"] }
+
+# ensure ASCII
+deunicode = "1.6.0"
+
+# misc
+time = "0.3.36"
+uuid = {version = "1.10.0", features = ["v4"]}

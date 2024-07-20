@@ -1,15 +1,13 @@
-use std::{fs::File, collections::{HashSet, HashMap}, sync::{Arc, Mutex}, str::FromStr, borrow::BorrowMut, ops::DerefMut};
+use std::{fs::File, collections::HashMap, sync::{Arc, Mutex}, str::FromStr};
 
-use axum::{Router, routing::{get, post}, Json, http::StatusCode, extract::State, response::IntoResponse};
+use axum::{Router, routing::post, Json, http::StatusCode, extract::State};
 //use axum_macros::debug_handler;
 use clap::Parser;
 use futures_delay_queue::{delay_queue, DelayQueue, DelayHandle};
-use futures_intrusive::{channel::shared::GenericReceiver, buffer::GrowingHeapBuf};
-use nucleo::Nucleo;
+use futures_intrusive::buffer::GrowingHeapBuf;
 use serde::{Deserialize, Serialize};
 use time::Duration;
-use tokio::sync::RwLock;
-use tower_sessions::{MemoryStore, SessionManagerLayer, Expiry, Session, session::Id};
+use tower_sessions::{MemoryStore, SessionManagerLayer, Expiry, Session};
 use uuid::Uuid;
 use tokio::sync::Mutex as tok_Mutex;
 
@@ -60,6 +58,37 @@ struct AppState {
     delay_q: Arc<Mutex<DelayQueue<Uuid, GrowingHeapBuf<Uuid>>>>,
 }
 
+#[derive(Debug, Clone)]
+struct ServerConfig {
+    pool_max_size: usize,
+    pool_min_size: usize,
+    session_expiry_delay: u64, // in seconds
+    /*
+        We absolutely want to avoid valid sessions trying to use expired engines that have been returned back to the pool.
+        So the delay for returning en engine should be more than the expiry of a session.
+        On the other hand it is ok if a usable engine sits unused because its session has expired.
+        Total expiry of an engine will be session_expiry_delay + engine_returned_additional_delay.
+     */
+    engine_returned_additional_delay: u64, // in seconds
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self { 
+            pool_max_size: 10,
+            pool_min_size: 2,
+            session_expiry_delay: 10,
+            engine_returned_additional_delay: 2,
+        }
+    }
+}
+
+impl ServerConfig {
+    fn get_engine_expiry(&self) -> u64 {
+        return self.session_expiry_delay + self.engine_returned_additional_delay;
+    }
+}
+
 
 //#[debug_handler]
 async fn fuzzy(
@@ -96,7 +125,6 @@ async fn fuzzy(
 
             let local_uuid_string: String = session.get(SESSION_ENGINE_KEY).await.unwrap().unwrap();
             // keep session alive by resetting expiry
-            session.set_expiry(Some(Expiry::OnInactivity(Duration::seconds(appstate.server_config.session_expiry_delay))));
             let local_uuid = Uuid::from_str(&local_uuid_string).unwrap();
             let mut used_engines = appstate.used_engines.lock().await;/* {
                 Ok(used_engines_map) => used_engines_map,
@@ -111,7 +139,10 @@ async fn fuzzy(
             let result = session_engine.fuzzy_match(input);
 
             //let stuff = delay_handle.borrow_mut();
-            let new_handle = delay_handle.reset(std::time::Duration::from_secs(5)).await.unwrap();
+            session.set_expiry(Some(Expiry::OnInactivity(Duration::seconds(appstate.server_config.session_expiry_delay as i64))));
+            let new_handle = delay_handle.reset(
+                std::time::Duration::from_secs(appstate.server_config.get_engine_expiry()))
+                .await.unwrap();
             used_engines.insert(local_uuid, (session_engine, new_handle));
 
 
@@ -150,10 +181,12 @@ async fn fuzzy(
             //std::mem::drop(used_engines);
             
 
-            session.insert(SESSION_ENGINE_KEY, uuid.to_string()).await.unwrap();
             let result = session_engine.fuzzy_match(input);
 
-            let delay_handle = appstate.delay_q.lock().unwrap().insert(uuid, std::time::Duration::from_secs(5));
+            session.insert(SESSION_ENGINE_KEY, uuid.to_string()).await.unwrap();
+            let delay_handle = appstate.delay_q.lock().unwrap().insert(
+                uuid, 
+                std::time::Duration::from_secs(appstate.server_config.get_engine_expiry()));
 
             let mut used_engines = appstate.used_engines.lock().await;
             used_engines.insert(uuid, (session_engine, delay_handle));
@@ -177,23 +210,6 @@ async fn fuzzy(
     //return Ok(result);
 
     
-}
-
-#[derive(Debug, Clone)]
-struct ServerConfig {
-    pool_max_size: usize,
-    pool_min_size: usize,
-    session_expiry_delay: i64, // in seconds
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self { 
-            pool_max_size: 10,
-            pool_min_size: 2,
-            session_expiry_delay: 10,
-        }
-    }
 }
 
 #[tokio::main]
@@ -234,7 +250,7 @@ async fn main() {
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store)
         //.with_secure(false);
-        .with_expiry(Expiry::OnInactivity(Duration::seconds(server_config.session_expiry_delay)));
+        .with_expiry(Expiry::OnInactivity(Duration::seconds(server_config.session_expiry_delay as i64)));
 
     let _ = tokio::spawn(async move {
         //let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
