@@ -53,7 +53,9 @@ impl Autocomplete for SpeciesSuggesterRemote {
                 //println!("body: {:?}", response.text().unwrap());
                 let jsonres = response.json::<FuzzyMatchResponse>();
                 match jsonres {
-                    Ok(inner) => return Ok(inner.matches.into_iter().map(|data| data.string).collect()),
+                    Ok(inner) => {
+                        return Ok(inner.matches.into_iter().map(|data| format!("{}    ::::    {}", data.string, data.data.to_string())).collect())
+                    },
                     Err(e) => return Err(e.into()),
                 }
                 
@@ -68,7 +70,7 @@ impl Autocomplete for SpeciesSuggesterRemote {
 
     fn get_completion(
         &mut self,
-        input: &str,
+        _input: &str,
         highlighted_suggestion: Option<String>,
     ) -> Result<inquire::autocompletion::Replacement, inquire::CustomUserError> {
 
@@ -88,7 +90,7 @@ pub fn client_tui() {
 
 
     let client = reqwest::blocking::ClientBuilder::new().cookie_store(true).build().unwrap();
-    let spesugg = SpeciesSuggesterRemote{ client, addr: full_route };
+    let spesugg = SpeciesSuggesterRemote::new(full_route, client);
 
 
     let name = Text::new("Find species name: ").with_autocomplete(spesugg);

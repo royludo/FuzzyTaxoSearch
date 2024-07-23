@@ -249,7 +249,7 @@ async fn main() {
 
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store)
-        //.with_secure(false);
+        .with_secure(true) // why is session not working without this (true or false) ?
         .with_expiry(Expiry::OnInactivity(Duration::seconds(server_config.session_expiry_delay as i64)));
 
     let _ = tokio::spawn(async move {
