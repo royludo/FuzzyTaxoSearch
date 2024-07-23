@@ -1,8 +1,13 @@
-use std::{sync::Arc, borrow::BorrowMut};
+use std::{sync::{Arc, Mutex}, borrow::BorrowMut, collections::HashMap};
 
 use deadpool::unmanaged;
+use futures_delay_queue::{delay_queue, DelayHandle, DelayQueue};
+use futures_intrusive::{channel::shared::GenericReceiver, buffer::GrowingHeapBuf};
 use nucleo::Nucleo;
 use nucleo_matcher::Utf32String;
+use parking_lot::RawMutex;
+use tokio::sync::Mutex as tok_Mutex;
+use uuid::Uuid;
 
 use crate::io::EngineInputData;
 
@@ -11,6 +16,8 @@ behaves like an Arc<Mutex> (doc says: This struct can be cloned and transferred
 across thread boundaries and uses reference counting for its internal state.)
 */
 pub type EnginePool = unmanaged::Pool<EngineWrapper>;
+pub type UsedEngineMap = Arc<tok_Mutex<HashMap<Uuid, (EngineWrapper, DelayHandle)>>>;
+pub type DelayQRx = GenericReceiver<RawMutex, Uuid, GrowingHeapBuf<Uuid>>;
 
 #[derive()]
 pub struct EngineWrapper {
@@ -84,3 +91,22 @@ impl EngineWrapper {
 }
 
 
+pub async fn build_pool_ecosystem(input_data: &Vec<EngineInputData>, max_size: usize, min_size: usize) ->
+    (EnginePool, UsedEngineMap, Arc<Mutex<DelayQueue<Uuid, GrowingHeapBuf<Uuid>>>>, DelayQRx) {
+
+    let engine_pool = EnginePool::new(max_size);
+    for _i in 0..min_size {
+        let _ = engine_pool.add(EngineWrapper::new(input_data)).await;
+    }
+    println!("Pool {:?}", engine_pool.status());
+
+    let (delay_queue , rx) = delay_queue::<Uuid>();
+    let arcmut_used_engine: UsedEngineMap  = Arc::new(tok_Mutex::new(HashMap::new()));
+
+    return (
+        engine_pool,
+        arcmut_used_engine,
+        Arc::new(Mutex::new(delay_queue)),
+        rx
+    );
+}

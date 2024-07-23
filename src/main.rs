@@ -1,16 +1,14 @@
-use std::{fs::File, collections::HashMap, sync::{Arc, Mutex}, str::FromStr};
+use std::{fs::File, sync::{Arc, Mutex}, str::FromStr};
 
 use axum::{Router, routing::post, Json, http::StatusCode, extract::State};
 //use axum_macros::debug_handler;
 use clap::Parser;
-use futures_delay_queue::{delay_queue, DelayQueue, DelayHandle};
-use futures_intrusive::{buffer::GrowingHeapBuf, channel::shared::GenericReceiver};
-use parking_lot::RawMutex;
+use futures_delay_queue::DelayQueue;
+use futures_intrusive::buffer::GrowingHeapBuf;
 use serde::{Deserialize, Serialize};
 use time::Duration;
 use tower_sessions::{MemoryStore, SessionManagerLayer, Expiry, Session};
 use uuid::Uuid;
-use tokio::sync::Mutex as tok_Mutex;
 
 mod engine;
 mod io;
@@ -54,15 +52,21 @@ struct FuzzyMatchResponse {
 #[derive(Clone)]
 struct AppState {
     server_config: ServerConfig,
-    engine_pool: EnginePool,
-    used_engines: Arc<tok_Mutex<HashMap<Uuid, (EngineWrapper, DelayHandle)>>>, // this thing could become the bottleneck
-    delay_q: Arc<Mutex<DelayQueue<Uuid, GrowingHeapBuf<Uuid>>>>,
+
+    autocomplete_engine_pool: EnginePool,
+    autocomplete_used_engines: UsedEngineMap, // this thing could become the bottleneck
+    autocomplete_delay_q: Arc<Mutex<DelayQueue<Uuid, GrowingHeapBuf<Uuid>>>>,
+
+    gp_engine_pool: EnginePool,
+    gp_used_engines: UsedEngineMap,
+    gp_delay_q: Arc<Mutex<DelayQueue<Uuid, GrowingHeapBuf<Uuid>>>>,
 }
 
 #[derive(Debug, Clone)]
 struct ServerConfig {
-    pool_max_size: usize,
-    pool_min_size: usize,
+    // engine pool specificly for autocomplete
+    autocomplete_pool_max_size: usize,
+    autocomplete_pool_min_size: usize,
     session_expiry_delay: u64, // in seconds
     /*
         We absolutely want to avoid valid sessions trying to use expired engines that have been returned back to the pool.
@@ -71,15 +75,21 @@ struct ServerConfig {
         Total expiry of an engine will be session_expiry_delay + engine_returned_additional_delay.
      */
     engine_returned_additional_delay: u64, // in seconds
+
+    // general purpose engine pool for other functions
+    gp_pool_max_size: usize,
+    gp_pool_min_size: usize,
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
         Self { 
-            pool_max_size: 10,
-            pool_min_size: 2,
+            autocomplete_pool_max_size: 10,
+            autocomplete_pool_min_size: 2,
             session_expiry_delay: 10,
             engine_returned_additional_delay: 2,
+            gp_pool_max_size: 10,
+            gp_pool_min_size: 2,
         }
     }
 }
@@ -115,8 +125,8 @@ async fn fuzzy(
     }
 
     {   // the block is necessary because we aquire a lock that needs to go out of scope to be released
-        println!("-- fuzzy request handler      EnginePool {:?} used_engines {:?}", appstate.engine_pool.status(), 
-        appstate.used_engines.lock().await.len());
+        println!("-- fuzzy request handler      EnginePool {:?} used_engines {:?}", appstate.autocomplete_engine_pool.status(), 
+        appstate.autocomplete_used_engines.lock().await.len());
     }
 
     match session.id() {
@@ -127,7 +137,7 @@ async fn fuzzy(
             let local_uuid_string: String = session.get(SESSION_ENGINE_KEY).await.unwrap().unwrap();
             // keep session alive by resetting expiry
             let local_uuid = Uuid::from_str(&local_uuid_string).unwrap();
-            let mut used_engines = appstate.used_engines.lock().await;/* {
+            let mut used_engines = appstate.autocomplete_used_engines.lock().await;/* {
                 Ok(used_engines_map) => used_engines_map,
                 Err(e) => {
                     println!("Used engine lock error: {}", e.to_string());
@@ -154,7 +164,7 @@ async fn fuzzy(
         None => {
             // first request, session not fully created yet
             println!("First req");
-            let mut session_engine = appstate.engine_pool.remove().await.unwrap();/* {
+            let mut session_engine = appstate.autocomplete_engine_pool.remove().await.unwrap();/* {
                 Ok(engine) => {
                     engine
                 },
@@ -185,11 +195,11 @@ async fn fuzzy(
             let result = session_engine.fuzzy_match(input);
 
             session.insert(SESSION_ENGINE_KEY, uuid.to_string()).await.unwrap();
-            let delay_handle = appstate.delay_q.lock().unwrap().insert(
+            let delay_handle = appstate.autocomplete_delay_q.lock().unwrap().insert(
                 uuid, 
                 std::time::Duration::from_secs(appstate.server_config.get_engine_expiry()));
 
-            let mut used_engines = appstate.used_engines.lock().await;
+            let mut used_engines = appstate.autocomplete_used_engines.lock().await;
             used_engines.insert(uuid, (session_engine, delay_handle));
 
             
@@ -212,9 +222,6 @@ async fn fuzzy(
 
     
 }
-
-type UsedEngineMap = Arc<tok_Mutex<HashMap<Uuid, (EngineWrapper, DelayHandle)>>>;
-type DelayQRx = GenericReceiver<RawMutex, Uuid, GrowingHeapBuf<Uuid>>;
 
 async fn engine_cleanup_handler(
     rx: DelayQRx,
@@ -248,38 +255,42 @@ async fn main() {
     
     let server_config = ServerConfig::default(); 
 
-    //let species_name_set = parse_taxa(args.taxa_file).unwrap();
-    //println!("species count: {}", species_name_set.len());
-
-    //let engine_wrapper = EngineWrapper::new(&species_name_set);
-    /*let engine_pool = EnginePool::builder(PoolManager { input_data: result })
-        .max_size(2)
-        .build()
-        .unwrap();*/
-    let engine_pool = EnginePool::new(server_config.pool_max_size);
-    for _i in 0..server_config.pool_min_size {
-        let _ = engine_pool.add(EngineWrapper::new(&json_input)).await;
-    }
-    println!("{:?}", engine_pool.status());
-
-    let (delay_queue , rx) = delay_queue::<Uuid>();
-    //let arcmutex_delay_q = Arc::new(RwLock::new(delay_queue));
-    let arcmutex_used_engine = Arc::new(tok_Mutex::new(HashMap::new()));
+    // build autocomplete engine pool
+    let (autocomplete_engine_pool, 
+        arcmut_autocmplt_used_engine, 
+        autocomplete_delay_queue, 
+        autocomplete_rx) = build_pool_ecosystem(
+        &json_input, 
+        server_config.autocomplete_pool_max_size, 
+        server_config.autocomplete_pool_min_size).await;
+    
+    // build general purpose engine pool
+    let (gp_engine_pool, 
+        arcmut_gp_used_engine, 
+        gp_delay_queue, 
+        gp_rx) = build_pool_ecosystem(
+        &json_input, 
+        server_config.gp_pool_max_size, 
+        server_config.gp_pool_min_size).await;
 
 
     let appstate = AppState {
         server_config: server_config.clone(),
-        engine_pool: engine_pool.clone(), 
-        used_engines: arcmutex_used_engine.clone(),
-        delay_q: Arc::new(Mutex::new(delay_queue)),
+        autocomplete_engine_pool: autocomplete_engine_pool.clone(), 
+        autocomplete_used_engines: arcmut_autocmplt_used_engine.clone(),
+        autocomplete_delay_q: autocomplete_delay_queue,
+        gp_engine_pool: gp_engine_pool.clone(),
+        gp_used_engines: arcmut_gp_used_engine.clone(),
+        gp_delay_q: gp_delay_queue,
     };
 
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store)
-        .with_secure(false) // why is session not working without this, and only when false ?
+        .with_secure(false) // TODO why is session not working without this, and only when false ?
         .with_expiry(Expiry::OnInactivity(Duration::seconds(server_config.session_expiry_delay as i64)));
 
-    let _ = tokio::spawn(engine_cleanup_handler(rx, arcmutex_used_engine, engine_pool));
+    let _ = tokio::spawn(engine_cleanup_handler(autocomplete_rx, arcmut_autocmplt_used_engine, autocomplete_engine_pool));
+    let _ = tokio::spawn(engine_cleanup_handler(gp_rx, arcmut_gp_used_engine, gp_engine_pool));
     //let _ = forever.await;
     
 
