@@ -4,7 +4,8 @@ use axum::{Router, routing::post, Json, http::StatusCode, extract::State};
 //use axum_macros::debug_handler;
 use clap::Parser;
 use futures_delay_queue::{delay_queue, DelayQueue, DelayHandle};
-use futures_intrusive::buffer::GrowingHeapBuf;
+use futures_intrusive::{buffer::GrowingHeapBuf, channel::shared::GenericReceiver};
+use parking_lot::RawMutex;
 use serde::{Deserialize, Serialize};
 use time::Duration;
 use tower_sessions::{MemoryStore, SessionManagerLayer, Expiry, Session};
@@ -212,6 +213,32 @@ async fn fuzzy(
     
 }
 
+type UsedEngineMap = Arc<tok_Mutex<HashMap<Uuid, (EngineWrapper, DelayHandle)>>>;
+type DelayQRx = GenericReceiver<RawMutex, Uuid, GrowingHeapBuf<Uuid>>;
+
+async fn engine_cleanup_handler(
+    rx: DelayQRx,
+    arcmutex_used_engine: UsedEngineMap,
+    engine_pool: EnginePool,
+) {
+    //let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+    loop {
+        println!("awaiting timers");
+        match rx.receive().await {
+            Some(uuid_to_remove) => {
+                println!("Putting back engine id {:?}", uuid_to_remove);
+                let mut lock = arcmutex_used_engine.lock().await;
+                let (engine, _) = lock.remove(&uuid_to_remove).unwrap();
+                let _ = engine_pool.add(engine).await;
+            },
+            None => {
+                // the channel was closed
+                break;
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
@@ -240,7 +267,7 @@ async fn main() {
     let arcmutex_used_engine = Arc::new(tok_Mutex::new(HashMap::new()));
 
 
-    let appstate = AppState{
+    let appstate = AppState {
         server_config: server_config.clone(),
         engine_pool: engine_pool.clone(), 
         used_engines: arcmutex_used_engine.clone(),
@@ -252,25 +279,7 @@ async fn main() {
         .with_secure(true) // why is session not working without this (true or false) ?
         .with_expiry(Expiry::OnInactivity(Duration::seconds(server_config.session_expiry_delay as i64)));
 
-    let _ = tokio::spawn(async move {
-        //let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
-
-        loop {
-            println!("awaiting timers");
-            match rx.receive().await {
-                Some(uuid_to_remove) => {
-                    println!("Putting back engine id {:?}", uuid_to_remove);
-                    let mut lock = arcmutex_used_engine.lock().await;
-                    let (engine, _) = lock.remove(&uuid_to_remove).unwrap();
-                    let _ = engine_pool.add(engine).await;
-                },
-                None => {
-                    // the channel was closed
-                    break;
-                }
-            }
-        }
-    });
+    let _ = tokio::spawn(engine_cleanup_handler(rx, arcmutex_used_engine, engine_pool));
     //let _ = forever.await;
     
 

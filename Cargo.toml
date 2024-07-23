@@ -25,6 +25,7 @@ deadpool = "0.12.1"
 # timers for putting engines back into the pool
 futures-delay-queue = "0.6.0"
 futures-intrusive = "0.5.0"
+parking_lot = "0.12.3"
 
 # the heavy stuff for http server
 axum = "0.7.5"

@@ -856,6 +856,7 @@ dependencies = [
  "futures-intrusive",
  "nucleo",
  "nucleo-matcher",
+ "parking_lot",
  "serde",
  "serde_json",
  "time",
