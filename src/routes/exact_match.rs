@@ -1,29 +1,34 @@
 use axum::{Json, http::StatusCode, extract::State};
 //use axum_macros::debug_handler;
 use serde::{Deserialize, Serialize};
-use tower_sessions::Session;
 
 use crate::{io::EngineInputData, AppState};
 
 
 
 #[derive(Debug, Deserialize)]
-pub struct FuzzyMatchRequest {
-    string: String,
+pub struct ExactMatchRequest {
+    strings: Vec<String>,
 }
 
 // the output response
 #[derive(Serialize)]
-pub struct FuzzyMatchResponse {
-    matches: Vec<EngineInputData>
+pub struct ExactMatchResponse {
+    matches: Vec<Option<EngineInputData>>
 }
 
 pub async fn exact_match(
-    session: Session,
     State(appstate): State<AppState>, 
-    Json(payload): Json<FuzzyMatchRequest>,
+    Json(payload): Json<ExactMatchRequest>,
     )
--> (StatusCode, Json<FuzzyMatchResponse>) {
+-> (StatusCode, Json<ExactMatchResponse>) {
 
-    return (StatusCode::NOT_FOUND, Json(FuzzyMatchResponse { matches: vec![] }));
+    let input_vec = payload.strings;
+
+    let mut result: Vec<Option<EngineInputData>> = Vec::new();
+    for s in input_vec {
+        result.push(appstate.db_hashmap.get(&s).cloned());
+    }
+
+    return (StatusCode::OK, Json(ExactMatchResponse { matches: result }));
 }

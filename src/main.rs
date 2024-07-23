@@ -1,10 +1,11 @@
-use std::{fs::File, sync::{Arc, Mutex}};
+use std::{fs::File, sync::{Arc, Mutex}, collections::HashMap};
 
 use axum::{Router, routing::post};
 //use axum_macros::debug_handler;
 use clap::Parser;
 use futures_delay_queue::DelayQueue;
 use futures_intrusive::buffer::GrowingHeapBuf;
+use io::EngineInputData;
 use time::Duration;
 use tower_sessions::{MemoryStore, SessionManagerLayer, Expiry};
 use uuid::Uuid;
@@ -39,6 +40,7 @@ fn valid_file(s: &str) -> Result<String, String> {
 #[derive(Clone)]
 struct AppState {
     server_config: ServerConfig,
+    db_hashmap: Arc<HashMap<String, EngineInputData>>,
 
     autocomplete_engine_pool: EnginePool,
     autocomplete_used_engines: UsedEngineMap, // this thing could become the bottleneck
@@ -116,6 +118,7 @@ async fn main() {
     println!("Json file location: {:?}", args.json_input);
 
     let json_input = io::from_file(args.json_input);
+    let json_input_ashashmap = io::to_hashmap(&json_input);
     
     let server_config = ServerConfig::default(); 
 
@@ -140,6 +143,7 @@ async fn main() {
 
     let appstate = AppState {
         server_config: server_config.clone(),
+        db_hashmap: Arc::new(json_input_ashashmap),
         autocomplete_engine_pool: autocomplete_engine_pool.clone(), 
         autocomplete_used_engines: arcmut_autocmplt_used_engine.clone(),
         autocomplete_delay_q: autocomplete_delay_queue,
