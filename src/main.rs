@@ -276,7 +276,7 @@ async fn main() {
 
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store)
-        .with_secure(true) // why is session not working without this (true or false) ?
+        .with_secure(false) // why is session not working without this, and only when false ?
         .with_expiry(Expiry::OnInactivity(Duration::seconds(server_config.session_expiry_delay as i64)));
 
     let _ = tokio::spawn(engine_cleanup_handler(rx, arcmutex_used_engine, engine_pool));
