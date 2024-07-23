@@ -1,5 +1,5 @@
 use clap::Parser;
-use inquire::{Text, Autocomplete};
+use inquire::{Text, Autocomplete, Select};
 use reqwest::blocking::Client;
 use serde::{Serialize, Deserialize};
 
@@ -81,27 +81,62 @@ impl Autocomplete for SpeciesSuggesterRemote {
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct ExactMatchRequest {
+    strings: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ExactMatchResponse {
+    matches: Vec<Option<EngineInputData>>
+}
+
 
 pub fn client_tui() {
     let args = Args::parse();
     println!("Host at: {:?}", args.address);
-    let full_route = format!("http://{}/fuzzy", args.address);
+    let fuzzy_autocomplete_route = format!("http://{}/fuzzy", args.address);
+    let exact_match_route = format!("http://{}/exact_match", args.address);
    
-
-
     let client = reqwest::blocking::ClientBuilder::new().cookie_store(true).build().unwrap();
-    let spesugg = SpeciesSuggesterRemote::new(full_route, client);
 
+    let main_screen_fuzzy_auto_str = "Fuzzy autocomplete";
+    let main_screen_exact_match_str = "Exact match";
+    let main_screen_options = vec![main_screen_fuzzy_auto_str, main_screen_exact_match_str];
 
-    let name = Text::new("Find species name: ").with_autocomplete(spesugg);
+    let main_choice = Select::new("Choose what to test", main_screen_options).prompt().unwrap();
 
+    if main_choice == main_screen_fuzzy_auto_str {
 
+        let spesugg = SpeciesSuggesterRemote::new(fuzzy_autocomplete_route, client);
 
-    match name.prompt() {
-        Ok(name) => println!("Hello {}", name),
-        Err(e) => {
-            println!("An error happened when asking for your name, try again later.");
-            println!("{}", e.to_string());
-            },
+        let name = Text::new("Find species name: ").with_autocomplete(spesugg).prompt().unwrap();
+
+        println!("\tResult: {}", name);
+
+    } else if main_choice == main_screen_exact_match_str  {
+        
+        let query_string = Text::new("Find species name: ")
+            .with_help_message("Multiple query strings possible, separated with a comma ','")
+            .prompt()
+            .unwrap();
+        let query_strings = query_string.split(",").map(|s| s.trim().to_owned()) .collect::<Vec<String>>();
+
+        println!("\tSend request:");
+        println!("\tPOST to addr {}", exact_match_route);
+        let req_payload = ExactMatchRequest{ strings: query_strings };
+        println!("\tpayload: {}", serde_json::to_string(&req_payload).unwrap());
+        
+        let result = client.post(exact_match_route)
+            .json(&req_payload)
+            .send().unwrap();
+        
+        let jsonres = result.json::<ExactMatchResponse>().unwrap();
+        println!("\tResponse OK: {:?}", jsonres.matches);
+        
+
     }
+
+
+    
 }
