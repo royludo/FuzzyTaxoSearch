@@ -12,23 +12,23 @@ use crate::{io::EngineInputData, AppState};
 
 // the input request
 #[derive(Debug, Deserialize)]
-pub struct FuzzyMatchRequest {
+pub struct FuzzyAutocompleteRequest {
     string: String,
 }
 
 // the output response
 #[derive(Serialize)]
-pub struct FuzzyMatchResponse {
+pub struct FuzzyAutocompleteResponse {
     matches: Vec<EngineInputData>
 }
 
 //#[debug_handler]
-pub async fn fuzzy(
+pub async fn fuzzy_autocomplete(
     session: Session,
     State(appstate): State<AppState>, 
-    Json(payload): Json<FuzzyMatchRequest>,
+    Json(payload): Json<FuzzyAutocompleteRequest>,
     )
--> (StatusCode, Json<FuzzyMatchResponse>) {
+-> (StatusCode, Json<FuzzyAutocompleteResponse>) {
     //println!("{:?}", payload);
     let input = payload.string;
     /*println!("Received input: {:?}", input);
@@ -42,7 +42,7 @@ pub async fn fuzzy(
     //session.insert("key", SessionStuff("some stuff".to_owned())).await.unwrap();
 
     if input.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(FuzzyMatchResponse{ matches: vec![] }));
+        return (StatusCode::BAD_REQUEST, Json(FuzzyAutocompleteResponse{ matches: vec![] }));
     }
 
     {   // the block is necessary because we aquire a lock that needs to go out of scope to be released
@@ -79,7 +79,7 @@ pub async fn fuzzy(
 
 
 
-            return (StatusCode::OK, Json(FuzzyMatchResponse{ matches: result }));
+            return (StatusCode::OK, Json(FuzzyAutocompleteResponse{ matches: result }));
 
         },
         None => {
@@ -125,7 +125,7 @@ pub async fn fuzzy(
 
             
 
-            return (StatusCode::OK, Json(FuzzyMatchResponse{ matches: result }));
+            return (StatusCode::OK, Json(FuzzyAutocompleteResponse{ matches: result }));
 
         },
     };

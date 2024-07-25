@@ -42,10 +42,12 @@ struct AppState {
     server_config: ServerConfig,
     db_hashmap: Arc<HashMap<String, EngineInputData>>,
 
+    // dedicated to autocomplete
     autocomplete_engine_pool: EnginePool,
     autocomplete_used_engines: UsedEngineMap, // this thing could become the bottleneck
     autocomplete_delay_q: Arc<Mutex<DelayQueue<Uuid, GrowingHeapBuf<Uuid>>>>,
 
+    // general purpose
     gp_engine_pool: EnginePool,
     gp_used_engines: UsedEngineMap,
     gp_delay_q: Arc<Mutex<DelayQueue<Uuid, GrowingHeapBuf<Uuid>>>>,
@@ -166,8 +168,9 @@ async fn main() {
 
     // build our application with a single route
     let app = Router::new()
-        .route("/fuzzy", post(routes::fuzzy_autocomplete::fuzzy))
+        .route("/fuzzy", post(routes::fuzzy_autocomplete::fuzzy_autocomplete))
         .route("/exact_match", post(routes::exact_match::exact_match))
+        .route("/fuzzy_match", post(routes::fuzzy_match::fuzzy_match))
         .layer(session_layer)
         .with_state(appstate);
 
